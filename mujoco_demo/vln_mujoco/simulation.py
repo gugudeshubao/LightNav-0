@@ -9,6 +9,7 @@ import mujoco
 import numpy as np
 from PIL import Image
 
+from .grid_planner import GridPlan
 from .model import CAMERA_HEIGHT, CAMERA_WIDTH, PHYSICS_DT
 from .mpc import TRACK_V_MAX, W_MAX
 from .robots.base import RobotBackend
@@ -64,6 +65,12 @@ class Simulation:
             self.robot.reset()
             self._command = (0.0, 0.0)
             self._command_at = 0.0
+            # Do not let a new VLN session consume an image captured at the
+            # pre-reset pose. The render loop will publish a fresh pair next.
+            self._frame = None
+            self._third_person_frame = None
+            self._frame_count = 0
+            self._started_at = time.monotonic()
 
     def set_velocity(self, linear: float, angular: float) -> None:
         # Physical sanity bound only; per-mode VLN limits live in the MPC.
@@ -72,6 +79,18 @@ class Simulation:
         with self._lock:
             self._command = (linear, angular)
             self._command_at = time.monotonic()
+
+    def plan_world_path(
+        self,
+        start_pose: tuple[float, float, float],
+        goal_world: tuple[float, float],
+    ) -> GridPlan:
+        planner = getattr(self.robot, "plan_world_path", None)
+        if planner is None:
+            raise ValueError(
+                f"map-aware PointGoal is not supported by {self.robot_name}"
+            )
+        return planner(start_pose, goal_world)
 
     def frame(self) -> CameraFrame | None:
         with self._lock:

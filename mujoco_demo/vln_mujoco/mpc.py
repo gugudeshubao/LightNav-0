@@ -359,7 +359,18 @@ class MpcTracker:
         waypoints: Sequence[Sequence[float]],
         capture_pose: Sequence[float],
     ) -> None:
-        self._trajectory = project_body_to_world(waypoints, capture_pose)
+        self.set_world_path(project_body_to_world(waypoints, capture_pose))
+
+    def set_world_path(self, waypoints: Sequence[Sequence[float]]) -> None:
+        """Install an already world-frame ``[x, y, yaw]`` reference path."""
+        trajectory = np.asarray(waypoints, dtype=np.float64)
+        if trajectory.size == 0:
+            trajectory = np.empty((0, 3), dtype=np.float64)
+        if trajectory.ndim != 2 or trajectory.shape[1] != 3:
+            raise ValueError("world path must be an Nx3 array")
+        if not np.all(np.isfinite(trajectory)):
+            raise ValueError("world path must contain only finite values")
+        self._trajectory = trajectory.copy()
         self._generation += 1
         self.error = ""
         if len(self._trajectory) == 0:

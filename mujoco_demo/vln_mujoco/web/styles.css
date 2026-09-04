@@ -27,7 +27,7 @@ body {
     var(--paper);
   background-size: auto, 32px 32px, 32px 32px, auto;
 }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { color: inherit; }
 button:disabled { opacity: .38; cursor: not-allowed; }
 
@@ -78,13 +78,22 @@ h1 { font-size: 20px; }
 .form-block { padding: 14px 16px 17px; }
 .form-block label { display: block; margin: 0 0 7px; color: var(--muted); font: 700 9px/1 ui-monospace, SFMono-Regular, monospace; }
 .form-block label:not(:first-child) { margin-top: 14px; }
+.goal-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-bottom: 15px; padding: 3px; background: #0e1013; border: 1px solid var(--line); border-radius: 4px; }
+.goal-mode button { padding: 8px 6px; color: var(--muted); background: transparent; border: 0; border-radius: 2px; cursor: pointer; font: 750 9px/1 ui-monospace, SFMono-Regular, monospace; }
+.goal-mode button.active { color: #fff; background: var(--accent); }
+.form-block section[hidden] { display: none; }
 .inline-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
-input, textarea {
+input, textarea, select {
   width: 100%; min-width: 0; padding: 10px 11px; color: var(--ink); background: #12151a;
   border: 1px solid var(--line); border-radius: 4px; outline: none;
 }
 textarea { resize: vertical; line-height: 1.45; }
-input:focus, textarea:focus { border-color: var(--accent-deep); box-shadow: 0 0 0 2px rgba(59,130,246,.12); }
+input:focus, textarea:focus, select:focus { border-color: var(--accent-deep); box-shadow: 0 0 0 2px rgba(59,130,246,.12); }
+.point-goal-copy { margin: 0 0 13px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.point-goal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form-block .point-goal-grid label { margin: 0; }
+.point-goal-grid input { margin-top: 7px; }
+#point-planner { margin-top: -5px; }
 .inline-form button, .text-button { padding: 8px 11px; color: var(--accent-soft); background: transparent; border: 1px solid rgba(59,130,246,.45); border-radius: 4px; cursor: pointer; font-weight: 800; }
 .primary { width: 100%; margin-top: 11px; padding: 11px; color: #fff; background: var(--accent); border: 0; border-radius: 4px; cursor: pointer; font-weight: 900; }
 .primary.active { color: var(--ink); background: #303641; border: 1px solid #4a5260; }

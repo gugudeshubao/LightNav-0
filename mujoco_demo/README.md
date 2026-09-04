@@ -5,8 +5,8 @@ it runs
 in the fixed MolmoSpaces ProcTHOR 10K validation `val_2` multi-room scene, using
 the ceiling MJCF variant, MuJoCo RGB camera rendering, and either the bundled
 TurtleBot or an external MicroDuck model and walking policy. A single web page
-provides VLN instructions, live view, WASD driving, emergency stop, reset, and
-state readout.
+provides InstructionGoal and PointGoal control, live view, WASD driving,
+emergency stop, reset, and state readout.
 
 ## Highlights
 
@@ -141,6 +141,29 @@ robot streams its first-person frames to the server and tracks the returned
 waypoints with the MPC — the same client protocol and controller the real robots use in
 [`robot_deploy/`](../robot_deploy/README.md).
 
+## Driving it with PointGoal
+
+Select **PointGoal** in the web console and enter a target offset in metres:
+`Forward` is positive in front of the robot and `Left` is positive to its left.
+When **Start PointGoal** is pressed, that start-relative offset is transformed
+once into a fixed world-frame goal. Arrival uses an independent 0.15 m geometric
+tolerance; no model stop token is involved.
+
+PointGoal deliberately bypasses LightNav while reusing the same MPC, collision
+guard, and bounded local recovery as InstructionGoal mode. The default
+**Map-aware A\*** option samples a local occupancy grid with the TurtleBot's
+actual MuJoCo collision geometry, plans an eight-connected route without
+diagonal corner cutting, simplifies it by line of sight, and feeds the result
+to the MPC. Map construction uses a separate `MjData`, so it does not move or
+pause the live simulation. The **Direct line + local recovery** option retains
+the intentionally weak reactive baseline used for comparison.
+
+Map-aware PointGoal is currently implemented only for the bundled TurtleBot.
+Other robot backends fail explicitly instead of silently reverting to a direct
+path, because a valid occupancy map depends on the embodiment footprint.
+Inputs are finite, limited to 25 m from the start, and do not constrain the
+final heading.
+
 ## Layout
 
 ```text
@@ -152,6 +175,7 @@ mujoco_demo/
 │   ├── model.py       # scene loading and MuJoCo compilation
 │   ├── simulation.py  # shared runtime, cameras, watchdog, frame capture
 │   ├── mpc.py         # CasADi/IPOPT kinematic MPC
+│   ├── grid_planner.py# occupancy grid, A*, line-of-sight simplification
 │   ├── vln_client.py  # VLN WebSocket client
 │   └── server.py      # HTTP/WebSocket and control ownership
 ├── scripts/
@@ -183,6 +207,20 @@ IPOPT settings, and parameters all match `robot_deploy`'s `vln_mpc`:
 | `q_x` / `q_y` / `q_yaw` | `10.0` / `10.0` / `1.0` |
 | `r_v` / `r_w` | `0.1` / `0.1` |
 | IPOPT | `max_iter=100`, `acceptable_tol=1e-8`, `acceptable_obj_change_tol=1e-6` |
+
+The default TurtleBot remains kinematic, but each proposed planar pose is now
+checked against MuJoCo contacts before it is committed. A move that would deepen
+a lateral robot/environment penetration is rejected, while an in-place turn is
+still allowed when that turn is collision-free. The current block state, contact
+names, attempted penetration, and event count are exposed under
+`simulation.backend.collision_guard`. This is a hard safety boundary for the
+demo. In automatic VLN mode, a bounded local recovery layer consumes that
+feedback: it backs off 0.12 m, turns 90 degrees, follows the obstacle for 0.45 m,
+turns back to the impact heading, and probes forward for 0.30 m. A blocked probe
+adds another bypass segment, up to eight attempts. Its phase and effective
+command are exposed under `avoidance`. This is reactive local recovery rather
+than a map-based planner, so failure stops the robot instead of allowing an
+unbounded manoeuvre.
 
 ## Why a single MolmoSpaces scene is enough
 
@@ -233,5 +271,7 @@ endorsed by Open Robotics or ROBOTIS.
 - The spawn pose is fixed at `(x=6.5, y=13.8, yaw=0)` and environment objects
   are frozen;
 - RGB only for now, at a camera resolution of `480 × 270`;
-- The MPC only tracks the local waypoints provided by VLN — no navigation map,
-  global planning, collision response, or ROS interface.
+- The MPC only tracks the local waypoints provided by VLN — there is no
+  navigation map, global planning, or ROS interface. Automatic VLN mode has a
+  bounded reactive detour, but complex layouts can still end in a safe stop and
+  need a new VLA path or a real map-based local planner.
