@@ -236,7 +236,7 @@ def get_vllm_model(llm) -> torch.nn.Module:
 
 
 def load_vllm_engine(config: InferenceConfig, num_frames: int = 64) -> Any:
-    """Load a local vLLM LLM engine (bf16, pre-computed video embeddings enabled).
+    """Load a local vLLM LLM engine with pre-computed video embeddings enabled.
 
     ``num_frames`` sizes the worst-case video the engine profiles for memory
     (encoder cache + dummy ViT pass). Setting it to the actual history window
@@ -251,6 +251,8 @@ def load_vllm_engine(config: InferenceConfig, num_frames: int = 64) -> Any:
     config_dir, _, _ = resolve_model_paths(config.model_path)
     gpu_mem_util = float(getattr(config, "gpu_memory_utilization", 0.65) or 0.65)
     max_num_seqs = int(getattr(config, "max_num_seqs", 1) or 1)
+    quantization = getattr(config, "vllm_quantization", None) or None
+    load_format = "bitsandbytes" if quantization == "bitsandbytes" else "auto"
     # KV cache scales with batch width. ~150 KiB/token (bf16, 36 layers, 8 KV
     # heads, head_dim 128) x max_model_len 2048 x max_num_seqs, floored at 2 GiB.
     # Override with VLN_KV_CACHE_GIB.
@@ -263,13 +265,14 @@ def load_vllm_engine(config: InferenceConfig, num_frames: int = 64) -> Any:
     print(
         f"[lightnav] Loading vLLM engine from: {config_dir} (gpu_mem={gpu_mem_util}, "
         f"max_num_seqs={max_num_seqs}, kv_cache_gib={kv_cache_bytes / 1024**3:.1f}, "
-        f"num_frames={num_frames})"
+        f"num_frames={num_frames}, quantization={quantization or 'auto'})"
     )
 
     llm = LLM(
         model=config_dir,
         dtype="bfloat16",
-        quantization=None,
+        quantization=quantization,
+        load_format=load_format,
         # Size to the history window: vision tokens scale with num_frames (~12-20
         # pooled tokens/frame) + long instructions (300-600 tokens) + template
         # overhead. A hardcoded 2048 rejects 128-frame prompts, so scale with

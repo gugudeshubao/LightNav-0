@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0e1013">
   <title>VLN MuJoCo Console</title>
-  <link rel="stylesheet" href="/static/styles.css?v=third-person-pip">
-  <script src="/static/app.js?v=third-person-pip" defer></script>
+  <link rel="stylesheet" href="/static/styles.css?v=point-goal-v2">
+  <script src="/static/app.js?v=point-goal-v2" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -39,15 +39,35 @@
 
     <aside class="controls panel">
       <div class="form-block">
-        <label for="server-url">VLN Server WebSocket</label>
-        <div class="inline-form">
-          <input id="server-url" inputmode="url" autocomplete="url" placeholder="ws://127.0.0.1:8050">
-          <button id="save-server">Save</button>
+        <div class="goal-mode" role="tablist" aria-label="Autonomous goal type">
+          <button id="instruction-goal-mode" class="active" role="tab" aria-selected="true" type="button">InstructionGoal</button>
+          <button id="point-goal-mode" role="tab" aria-selected="false" type="button">PointGoal</button>
         </div>
-        <label for="instruction">Instruction</label>
-        <textarea id="instruction" maxlength="500" rows="3" placeholder="e.g. move forward, then go to the trashcan on the right">move forward, then go to the trashcan on the right</textarea>
-        <button class="primary" id="vln-toggle">Start VLN</button>
-        <p class="hint"><b id="vln-state">IDLE</b> · <span id="vln-detail">Set the server URL to get started.</span></p>
+        <section id="instruction-goal-panel" role="tabpanel" aria-labelledby="instruction-goal-mode">
+          <label for="server-url">VLN Server WebSocket</label>
+          <div class="inline-form">
+            <input id="server-url" inputmode="url" autocomplete="url" placeholder="ws://127.0.0.1:8050">
+            <button id="save-server">Save</button>
+          </div>
+          <label for="instruction">Instruction</label>
+          <textarea id="instruction" maxlength="500" rows="3" placeholder="e.g. move forward, then go to the trashcan on the right">move forward, then go to the trashcan on the right</textarea>
+          <button class="primary" id="vln-toggle">Start VLN</button>
+          <p class="hint"><b id="vln-state">IDLE</b> · <span id="vln-detail">Set the server URL to get started.</span></p>
+        </section>
+        <section id="point-goal-panel" role="tabpanel" aria-labelledby="point-goal-mode" hidden>
+          <p class="point-goal-copy">Target offset is fixed from the robot pose at Start. Positive left is the robot's left.</p>
+          <div class="point-goal-grid">
+            <label for="point-forward">Forward (m)<input id="point-forward" type="number" value="1.0" step="0.1" min="-25" max="25"></label>
+            <label for="point-left">Left (m)<input id="point-left" type="number" value="0.0" step="0.1" min="-25" max="25"></label>
+          </div>
+          <label for="point-planner">Path planner</label>
+          <select id="point-planner">
+            <option value="astar" selected>Map-aware A*</option>
+            <option value="direct">Direct line + local recovery</option>
+          </select>
+          <button class="primary" id="point-goal-toggle">Start PointGoal</button>
+          <p class="hint"><b id="point-goal-state">IDLE</b> · <span id="point-goal-detail">Enter a target relative to the current robot pose.</span></p>
+        </section>
       </div>
 
       <div class="divider"></div>

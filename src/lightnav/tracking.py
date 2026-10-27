@@ -249,6 +249,7 @@ def build_tracking_agent(
     max_new_tokens: int = 8,
     device: str = "cuda",
     gpu_memory_utilization: float = 0.85,
+    vllm_quantization: str | None = None,
     pool_spatial: int | None = None,
     action_tokenizer_bundle: str | Path | None = None,
     task_key: str = "trackvla",
@@ -301,6 +302,7 @@ def build_tracking_agent(
         max_new_tokens=max_new_tokens,
         device=device,
         gpu_memory_utilization=gpu_memory_utilization,
+        vllm_quantization=vllm_quantization,
         aspect_mode=aspect_mode,
     )
     if pool_spatial is not None:

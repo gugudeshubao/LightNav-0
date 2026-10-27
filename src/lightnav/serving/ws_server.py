@@ -44,6 +44,7 @@ import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
@@ -51,6 +52,7 @@ from websockets.exceptions import ConnectionClosed
 
 from lightnav.inference.config import InferenceConfig
 from lightnav.inference.engine import build_engine
+from lightnav.serving.preprocessed import decode_preprocessed
 from lightnav.serving.protocol import actions_payload, pointing_payload
 from lightnav.serving.token_budget import (
     action_token_count,
@@ -182,6 +184,7 @@ def _build_engine(args: argparse.Namespace):
         device=args.device,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_num_seqs=args.max_batch_size,
+        vllm_quantization=getattr(args, "vllm_quantization", None),
         num_history_frames=args.num_history_frames,
         aspect_mode=getattr(args, "aspect_mode", "stretch"),
     )
@@ -368,11 +371,13 @@ def make_handler(service, recorder=None):
                         record_begin_episode(only_if_closed=False)
                         await send_response({"action": "reset", "data": {"rc": 0, "msg": "ok"}})
 
-                    elif action == "next":
+                    elif action in ("next", "next_tensor"):
                         seq = _parse_seq(data)
                         img_b64 = data.get("image")
-                        if not isinstance(img_b64, str) or not img_b64:
+                        if action == "next" and (not isinstance(img_b64, str) or not img_b64):
                             raise _RequestDispatchError("missing image")
+                        if action == "next_tensor" and (recorder is not None or "image" in data):
+                            raise _RequestDispatchError("tensor input cannot mix images or image recording")
                         instruction_value = data.get("instruction", "")
                         if instruction_value is None:
                             instruction = ""
@@ -382,14 +387,22 @@ def make_handler(service, recorder=None):
                             instruction = instruction_value
                         current_session = ensure_session()
                         try:
-                            rgb, image_bytes = _decode_jpeg_b64_with_bytes(img_b64)
+                            if action == "next_tensor":
+                                tensor, source_hw = decode_preprocessed(data.get("frame_tensor"))
+                                rgb = SimpleNamespace(shape=(*source_hw, 3))
+                                image_bytes = None
+                            else:
+                                rgb, image_bytes = _decode_jpeg_b64_with_bytes(img_b64)
                         except Exception as exc:
                             raise _RequestDispatchError(f"bad image: {exc}") from exc
                         # The frame is buffered even when there is nothing to predict yet.
-                        current_session.observe(rgb)
+                        if action == "next_tensor":
+                            current_session.observe_preprocessed(tensor, source_hw)
+                        else:
+                            current_session.observe(rgb)
                         if not instruction:
                             await send_response(
-                                {"action": "next", "data": {"rc": 0, "seq": seq, "msg": "image received"}}
+                                {"action": action, "data": {"rc": 0, "seq": seq, "msg": "image received"}}
                             )
                             continue
                         current_session.instruction = instruction
@@ -402,7 +415,7 @@ def make_handler(service, recorder=None):
                                 SERVER_LOG_TAG, seq, type(exc).__name__, exc,
                             )
                             await send_response(
-                                {"action": "next", "data": {"rc": 500, "seq": seq, "msg": str(exc)}}
+                                {"action": action, "data": {"rc": 500, "seq": seq, "msg": str(exc)}}
                             )
                             continue
                         latency_ms = (time.monotonic() - t0) * 1000.0
@@ -410,6 +423,7 @@ def make_handler(service, recorder=None):
                         # connection; it is never retried and never answered twice.
                         try:
                             response = _success_response(pred, seq, latency_ms, current_session, rgb)
+                            response["action"] = action
                             await send_response(response)
                         except ConnectionClosed:
                             break
@@ -421,6 +435,8 @@ def make_handler(service, recorder=None):
                         # Recorded after the reply is on the wire, so recording never
                         # delays or reorders a response. The record carries the very
                         # JPEG bytes the client sent and the pointing payload it received.
+                        if action == "next_tensor":
+                            continue
                         record_step(
                             current_session=current_session,
                             seq=seq,
@@ -668,6 +684,13 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.85,
         help="vLLM gpu_memory_utilization (vllm_local only). 0.85 suits one engine per GPU.",
+    )
+    parser.add_argument(
+        "--vllm_quantization",
+        default=os.environ.get("VLLM_QUANTIZATION") or None,
+        help="Explicit vLLM quantization method, for example fp8 or bitsandbytes. "
+        "Default: auto-detect a serialized checkpoint, otherwise use its native dtype. "
+        "Env: VLLM_QUANTIZATION.",
     )
     parser.add_argument(
         "--num_history_frames",

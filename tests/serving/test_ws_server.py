@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import sys
+import zlib
 from argparse import Namespace
 from types import SimpleNamespace
 
@@ -131,6 +132,7 @@ def _engine_args(**overrides) -> Namespace:
         max_new_tokens=8,
         device="cuda",
         gpu_memory_utilization=0.85,
+        vllm_quantization=None,
         max_batch_size=16,
         pool_spatial=None,
         num_history_frames=128,
@@ -158,6 +160,7 @@ def test_build_engine_maps_tracking_task_to_trackvla(monkeypatch):
     assert cfg.num_history_frames == 128
     assert cfg.max_num_seqs == 16  # --max_batch_size feeds the vLLM batch width
     assert cfg.gpu_memory_utilization == 0.85
+    assert cfg.vllm_quantization is None
     assert cfg.pool_spatial is None
 
 
@@ -185,7 +188,15 @@ def test_engine_task_mapping_rejects_unknown_tasks():
 
 
 def test_parser_defaults(monkeypatch):
-    for key in ("TASK", "HOST", "PORT", "MAX_BATCH_SIZE", "MAX_WAIT_MS", "ACTION_TOKENIZER_BUNDLE"):
+    for key in (
+        "TASK",
+        "HOST",
+        "PORT",
+        "MAX_BATCH_SIZE",
+        "MAX_WAIT_MS",
+        "ACTION_TOKENIZER_BUNDLE",
+        "VLLM_QUANTIZATION",
+    ):
         monkeypatch.delenv(key, raising=False)
 
     args = ws_server._build_parser().parse_args(
@@ -197,6 +208,7 @@ def test_parser_defaults(monkeypatch):
     assert args.host == "0.0.0.0" and args.port == 8050
     assert args.max_batch_size == 8 and args.max_wait_ms == 8.0
     assert args.max_new_tokens == 8 and args.gpu_memory_utilization == 0.85
+    assert args.vllm_quantization is None
     assert args.num_history_frames is None and args.pool_spatial is None
     assert args.ready_file is None and args.action_tokenizer_bundle is None
     assert args.no_warmup is False
@@ -209,12 +221,14 @@ def test_parser_reads_env_defaults(monkeypatch):
     monkeypatch.setenv("MAX_BATCH_SIZE", "2")
     monkeypatch.setenv("MAX_WAIT_MS", "4")
     monkeypatch.setenv("ACTION_TOKENIZER_BUNDLE", "/path/to/bundle")
+    monkeypatch.setenv("VLLM_QUANTIZATION", "fp8")
 
     args = ws_server._build_parser().parse_args(["--model_path", "/path/to/ckpt"])
 
     assert args.task == "vln" and args.port == 9000 and args.host == "127.0.0.1"
     assert args.max_batch_size == 2 and args.max_wait_ms == 4.0
     assert args.action_tokenizer_bundle == "/path/to/bundle"
+    assert args.vllm_quantization == "fp8"
 
 
 @pytest.mark.parametrize(
@@ -240,6 +254,37 @@ def test_main_requires_exactly_one_action_decoder(monkeypatch, argv):
 
 
 # -- login / reset -----------------------------------------------------------------------------
+
+
+async def test_tensor_input_bypasses_image_decode_and_keeps_source_pointing(monkeypatch):
+    from lightnav.serving.preprocessed import CONTRACT
+
+    class TensorSession(FakeSession):
+        def observe_preprocessed(self, tensor, source_hw):
+            assert tuple(tensor.shape) == (3, 2, 4)
+            assert source_hw == (640, 720)
+            self._buffer_len += 1
+
+    service = FakeService([_pred()])
+    service.make_session = lambda **_: TensorSession()
+    monkeypatch.setattr(ws_server, "_decode_jpeg_b64_with_bytes",
+                        lambda _: pytest.fail("image decoding called"))
+    frame = dict(contract=CONTRACT, shape=[2, 4, 3], source_hw=[640, 720],
+                 compression="zlib", data_b64=base64.b64encode(
+                     zlib.compress(np.zeros((2, 4, 3), dtype="<f2").tobytes())).decode())
+    ws = await _run([json.dumps(dict(action="next_tensor", data=dict(
+        seq=1, frame_tensor=frame, instruction="go")))], service)
+    assert ws.sent[0]["action"] == "next_tensor"
+    assert ws.sent[0]["data"]["rc"] == 0
+    assert service.predict_calls == 1
+
+
+async def test_tensor_input_rejects_mixed_image_before_prediction():
+    service = FakeService()
+    ws = await _run([json.dumps(dict(action="next_tensor", data=dict(
+        seq=1, image="unexpected", frame_tensor={}, instruction="go")))], service)
+    assert ws.sent[0]["data"]["rc"] != 0
+    assert service.predict_calls == 0
 
 
 async def test_login_client_id_is_passed_to_session_creation():

@@ -65,6 +65,7 @@ class HabitatEvalConfig:
     action_tokenizer_bundle: str | None = None  # RVQ bundle dir
     gpu_memory_utilization: float = 0.65
     max_num_seqs: int = 1
+    vllm_quantization: str | None = None
     num_history_frames: int | None = None
     aspect_mode: str = "stretch"  # stretch | keep (see InferenceConfig)
     # Per-step decode cap. Greedy decoding stops at eos, so this only truncates; 64 is
@@ -217,6 +218,7 @@ def _default_engine_factory(cfg: HabitatEvalConfig) -> tuple[Any, Any]:
         max_new_tokens=cfg.max_new_tokens,
         gpu_memory_utilization=cfg.gpu_memory_utilization,
         max_num_seqs=cfg.max_num_seqs,
+        vllm_quantization=cfg.vllm_quantization,
         num_history_frames=cfg.num_history_frames,
         aspect_mode=cfg.aspect_mode,
     )

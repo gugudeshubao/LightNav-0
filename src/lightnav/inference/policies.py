@@ -89,6 +89,7 @@ class NavigationPolicy:
         self._next_frame_id = 0
         self.instruction = instruction
         self.video_size = None
+        self._input_kind = None
         if self._vit_cache is not None:
             self._vit_cache.clear()
         self.engine.reset_episode_state()
@@ -105,11 +106,32 @@ class NavigationPolicy:
 
     def observe(self, rgb_frame) -> None:
         """Add a frame to history without running inference."""
-        self._history.append(rgb_frame.copy())
+        if getattr(self, "_input_kind", None) not in (None, "rgb"):
+            raise ValueError("reset before changing frame representation")
+        frame_tensor = self._convert_frame(rgb_frame)
+        self._input_kind = "rgb"
+        self._append_tensor(frame_tensor, rgb_frame.copy())
+
+    def observe_preprocessed(self, tensor: torch.Tensor, source_hw: tuple[int, int]) -> None:
+        """Admit edge-normalized CHW FP16 pixels without resize or normalization."""
+        if getattr(self, "_input_kind", None) not in (None, "prepared"):
+            raise ValueError("reset before changing frame representation")
+        base = tuple(int(v) for v in self.engine.bundle.video_size)
+        expected = (choose_video_size(source_hw, base, multiple=self._size_multiple())
+                    if self.aspect_mode == "keep" else base)
+        if (tensor.device.type != "cpu" or tensor.dtype != torch.float16
+                or tuple(tensor.shape) != (3, *expected)
+                or not torch.isfinite(tensor).all() or torch.any(tensor.abs() > 1)
+                or self.video_size not in (None, expected)):
+            raise ValueError("prepared frame does not match checkpoint spatial/value contract")
+        self.video_size = expected
+        self._input_kind = "prepared"
+        self._append_tensor(tensor, None)
+
+    def _append_tensor(self, frame_tensor: torch.Tensor, source) -> None:
+        self._history.append(source)
         self._history_frame_ids.append(self._next_frame_id)
         self._next_frame_id += 1
-
-        frame_tensor = self._convert_frame(rgb_frame)
 
         if self.slowfast:
             # Keep the whole episode (frame i at index i) so the span tier can

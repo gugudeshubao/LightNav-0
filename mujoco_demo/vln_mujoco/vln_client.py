@@ -37,6 +37,11 @@ class InferenceResult:
     apos_px: Pixel | None
     opos_px: Pixel | None
     latency_ms: float
+    offered_at_s: float = 0.0
+    sent_at_s: float = 0.0
+    received_at_s: float = 0.0
+    server_timings_ms: dict[str, float] | None = None
+    input_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,17 +80,19 @@ def normalize_server_url(value: str) -> str:
 
 
 class VlnClient:
-    def __init__(self, logger: Logger, server_url: str = "") -> None:
+    def __init__(self, logger: Logger, server_url: str = "", *, prefetch_frames: bool = True) -> None:
         self._logger = logger
         self._lock = threading.Lock()
         self._server_url = normalize_server_url(server_url)
         self._instruction = ""
         self._session = 0
+        self._prefetch_frames = prefetch_frames
+        self._inflight_session: int | None = None
         self._state = "IDLE"
         self._connected = False
         self._sequence = 0
         self._error = ""
-        self._pending_frame: tuple[int, bytes] | None = None
+        self._pending_frame: tuple[int, bytes, float] | None = None
         self._results: queue.Queue[InferenceResult] = queue.Queue()
         self._stop = threading.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -137,7 +144,9 @@ class VlnClient:
         with self._lock:
             if not self._instruction or not self._connected or self._pending_frame is not None:
                 return False
-            self._pending_frame = int(stamp_ns), bytes(jpeg)
+            if not self._prefetch_frames and self._inflight_session == self._session:
+                return False
+            self._pending_frame = int(stamp_ns), bytes(jpeg), time.monotonic()
             return True
 
     def take_results(self) -> list[InferenceResult]:
@@ -195,6 +204,10 @@ class VlnClient:
                     self._set_runtime(session, state="ERROR", connected=False, error=str(exc))
                     self._logger.warning(f"VLN: {exc}")
                     await asyncio.sleep(1.0)
+            finally:
+                with self._lock:
+                    if self._inflight_session == session:
+                        self._inflight_session = None
 
     async def _connection(self, session: int) -> None:
         with self._lock:
@@ -211,7 +224,7 @@ class VlnClient:
                     if frame is None:
                         await asyncio.sleep(0.01)
                         continue
-                    stamp_ns, jpeg = frame
+                    stamp_ns, jpeg, offered_at = frame
                     instruction, _ = self._active()
                     sequence = self._next_sequence(session)
                     sent_at = time.monotonic()
@@ -226,6 +239,7 @@ class VlnClient:
                         }
                     )
                     data = self._response_data(await self._receive(websocket, 3.0), "next")
+                    received_at = time.monotonic()
                     if data.get("seq") != sequence:
                         raise RuntimeError("VLN response sequence mismatch")
                     pointing = data.get("pointing")
@@ -241,16 +255,29 @@ class VlnClient:
                         opos_state=self._optional_string(pointing, "opos_state"),
                         apos_px=self._optional_pixel(pointing, "apos_px"),
                         opos_px=self._optional_pixel(pointing, "opos_px"),
-                        latency_ms=(time.monotonic() - sent_at) * 1000.0,
+                        latency_ms=(received_at - sent_at) * 1000.0,
+                        offered_at_s=offered_at,
+                        sent_at_s=sent_at,
+                        received_at_s=received_at,
+                        server_timings_ms=self._parse_timings(data.get("timings_ms")),
+                        input_tokens=self._input_tokens(data.get("flash_metrics")),
                     )
-                    if self._is_active(session):
-                        self._results.put_nowait(result)
+                    self._publish_result(session, result)
                 with contextlib.suppress(Exception):
                     await websocket.send_json({"action": "reset"})
 
     def _active(self) -> tuple[str, int]:
         with self._lock:
             return self._instruction, self._session
+
+    def _publish_result(self, session: int, result: InferenceResult) -> None:
+        # Publish and release admission under the same session lock. A cancelled
+        # request cannot repopulate the cleared result queue or unlock a new one.
+        with self._lock:
+            if self._inflight_session == session:
+                self._inflight_session = None
+            if self._instruction and self._session == session:
+                self._results.put_nowait(result)
 
     def _is_active(self, session: int) -> bool:
         with self._lock:
@@ -270,12 +297,14 @@ class VlnClient:
                 self._connected = connected
                 self._error = error
 
-    def _take_frame(self, session: int) -> tuple[int, bytes] | None:
+    def _take_frame(self, session: int) -> tuple[int, bytes, float] | None:
         with self._lock:
             if self._session != session:
                 return None
             frame = self._pending_frame
             self._pending_frame = None
+            if frame is not None:
+                self._inflight_session = session
             return frame
 
     def _next_sequence(self, session: int) -> int:
@@ -346,6 +375,20 @@ class VlnClient:
 
         collect(value)
         return tuple(points)
+
+    @staticmethod
+    def _parse_timings(value: object) -> dict[str, float]:
+        # Optional diagnostics never turn malformed metrics into control input.
+        if not isinstance(value, dict):
+            return {}
+        return {key: float(number) for key, number in value.items()
+                if isinstance(key, str) and isinstance(number, (int, float))
+                and not isinstance(number, bool) and math.isfinite(number) and number >= 0}
+
+    @staticmethod
+    def _input_tokens(value: object) -> int | None:
+        count = value.get("input_tokens") if isinstance(value, dict) else None
+        return count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
 
     @staticmethod
     def _optional_bool(data: dict, key: str) -> bool | None:

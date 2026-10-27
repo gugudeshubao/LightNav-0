@@ -146,6 +146,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="vLLM GPU memory fraction (vllm_local only).",
     )
     ap.add_argument(
+        "--vllm_quantization",
+        default=None,
+        help="Explicit vLLM quantization method (vllm_local only), for example fp8.",
+    )
+    ap.add_argument(
         "--pool_spatial",
         type=int,
         default=None,
@@ -189,6 +194,7 @@ def main() -> int:
         max_new_tokens=args.max_new_tokens,
         device=args.device,
         gpu_memory_utilization=args.gpu_memory_utilization,
+        vllm_quantization=args.vllm_quantization,
         pool_spatial=args.pool_spatial,
         aspect_mode=args.aspect_mode,
         action_tokenizer_bundle=args.action_tokenizer_bundle,

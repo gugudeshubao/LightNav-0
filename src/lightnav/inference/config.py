@@ -23,6 +23,10 @@ class InferenceConfig:
     # vLLM engine sizing (vllm_local backend only).
     gpu_memory_utilization: float = 0.65
     max_num_seqs: int = 1  # vLLM batch width; >1 enables micro-batching.
+    # Explicit vLLM quantization method (for example ``"fp8"``). ``None`` lets
+    # vLLM infer a serialized checkpoint's method, or keeps ordinary weights in
+    # their configured dtype. This is intentionally separate from the HF backend.
+    vllm_quantization: str | None = None
 
     # HF backend attention kernel override (None -> LIGHTNAV_ATTN env or "sdpa").
     attn_implementation: str | None = None

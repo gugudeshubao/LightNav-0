@@ -367,6 +367,18 @@ class VLNInferenceEngine:
         # positions inside vLLM.)
         gen.pop("position_ids", None)
 
+        # process_sample drops processor modality metadata and may append an
+        # assistant prefix. Rebuild it from the final, answer-trimmed prompt:
+        # transformers 5.8 generation otherwise silently uses text-only RoPE,
+        # even when video_grid_thw and visual embeddings are present.
+        if gen.get("image_grid_thw") is not None or gen.get("video_grid_thw") is not None:
+            input_ids = gen["input_ids"]
+            model_config = self.bundle.model.config
+            mm_token_type_ids = torch.zeros_like(input_ids)
+            mm_token_type_ids[input_ids == model_config.image_token_id] = 1
+            mm_token_type_ids[input_ids == model_config.video_token_id] = 2
+            gen["mm_token_type_ids"] = mm_token_type_ids
+
         # Post-ViT pooling kwargs are emitted by the data processor and consumed
         # by model.forward() via the _post_vit_target attribute (set at build
         # time by enable_post_vit_pool, see model.load_hf_model). They are
@@ -726,6 +738,8 @@ def build_engine(
             aspect_mode=config.aspect_mode,
         )
     elif backend == "hf":
+        if getattr(config, "vllm_quantization", None):
+            raise ValueError("vllm_quantization requires backend='vllm_local'")
         bundle = load_hf_model(config, task_type=task_type)
         engine = VLNInferenceEngine(
             bundle,

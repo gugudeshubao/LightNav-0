@@ -194,11 +194,17 @@ def test_build_tracking_agent_resolves_the_shipped_bundle(shipped_rvq_checkpoint
         return fake_engine, fake_engine.bundle
 
     monkeypatch.setattr("lightnav.tracking.build_engine", fake_build_engine)
-    agent = build_tracking_agent(str(shipped_rvq_checkpoint), backend="hf", task_key="vlnce")
+    agent = build_tracking_agent(
+        str(shipped_rvq_checkpoint),
+        backend="vllm_local",
+        task_key="vlnce",
+        vllm_quantization="fp8",
+    )
     assert agent.rvq is not None and agent.H == 10 and agent.centroids is None
     # The engine is built from the SAME eval_config task entry the decoder came from.
     assert seen["task_type"] == "vlnce"
     assert seen["cfg"].max_new_tokens >= 1 + len(agent.rvq.levels) + 1
+    assert seen["cfg"].vllm_quantization == "fp8"
 
     with pytest.raises(ValueError, match="only one"):
         build_tracking_agent("/x", traj_vocab_path="/v", action_tokenizer_bundle="/b")

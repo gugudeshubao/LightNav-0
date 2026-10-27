@@ -184,3 +184,37 @@ with connect("ws://localhost:8050", max_size=64 * 1024 * 1024) as ws:
         if data["rc"] == 0 and "actions" in data:
             fwd, lat, yaw = data["actions"]["actions"][0]
 ```
+
+## Experimental edge-preprocessed input
+
+`next_tensor` accepts `seq`, `instruction`, and `frame_tensor` instead of `image`.
+It replies using action `next_tensor` with the same prediction fields as `next`.
+This candidate is not yet a validated robot deployment or an enabled Flash Serve
+gateway transport. The existing image interface remains available for comparison.
+
+`frame_tensor` has exactly these fields:
+
+- `contract`: `lightnav.rgb-normalized.hwc-fp16.v1`
+- `shape`: `[height, width, 3]`, matching the checkpoint's selected video grid
+- `source_hw`: original `[height, width]`, retained for pointing coordinates
+- `compression`: `zlib` or `zstd-shuffle`
+- `data_b64`: base64 of one compressed stream containing little-endian HWC FP16 values
+
+Pixels must be finite and in `[-1, 1]`. RGB conversion, bilinear resizing and
+normalization are performed on the edge device. The server decompresses and
+validates the tensor, changes its layout view to CHW, and buffers it without
+image decoding, resizing or normalization. Decompression has a strict output
+bound; extra streams, extra bytes and checkpoint size mismatches are rejected.
+FP16 is a distinct precision contract, not a claim of bitwise equivalence to the
+existing FP32 image preprocessor; model-output comparison is required.
+
+A session cannot mix `next` images with `next_tensor` tensors without reset.
+Tensor input also rejects `image` and image-recording mode, rather than creating
+synthetic recordings. Metadata does not reassign capture timestamps or relax
+robot-side freshness and collision checks.
+
+`zstd-shuffle` losslessly groups low bytes followed by high bytes of FP16 elements,
+then compresses with Zstandard. The server reverses byte grouping after bounded
+decompression; no pixel arithmetic is performed. This optional codec requires
+system `libzstd` on both endpoints. Missing support fails explicitly, without an
+image-path fallback. Extra frames and mismatched decompressed lengths are rejected.

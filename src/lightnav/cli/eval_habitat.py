@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.gpu_memory_utilization,
         help="vLLM GPU memory fraction (vllm_local backend).",
     )
+    p.add_argument(
+        "--vllm_quantization",
+        default=_DEFAULTS.vllm_quantization,
+        help="Explicit vLLM quantization method (vllm_local only), for example fp8.",
+    )
     p.add_argument("--max_num_seqs", type=int, default=_DEFAULTS.max_num_seqs)
     p.add_argument(
         "--num_history_frames",
@@ -157,6 +162,7 @@ def config_from_args(args: argparse.Namespace) -> HabitatEvalConfig:
         action_tokenizer_bundle=args.action_tokenizer_bundle,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_num_seqs=args.max_num_seqs,
+        vllm_quantization=args.vllm_quantization,
         num_history_frames=args.num_history_frames,
         aspect_mode=args.aspect_mode,
         max_new_tokens=args.max_new_tokens,

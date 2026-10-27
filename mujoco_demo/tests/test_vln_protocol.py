@@ -64,6 +64,10 @@ async def test_vln_login_next_and_result(unused_tcp_port: int) -> None:
         assert results[0].sequence == 1
         assert results[0].waypoints == ((0.6, 0.1, 0.2),)
         assert results[0].visible is True
+        assert 0 < results[0].offered_at_s <= results[0].sent_at_s <= results[0].received_at_s
+        assert results[0].latency_ms == pytest.approx(
+            (results[0].received_at_s - results[0].sent_at_s) * 1000
+        )
     finally:
         client.close()
         await runner.cleanup()

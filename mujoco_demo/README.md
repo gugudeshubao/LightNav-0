@@ -5,8 +5,8 @@ it runs
 in the fixed MolmoSpaces ProcTHOR 10K validation `val_2` multi-room scene, using
 the ceiling MJCF variant, MuJoCo RGB camera rendering, and either the bundled
 TurtleBot or an external MicroDuck model and walking policy. A single web page
-provides VLN instructions, live view, WASD driving, emergency stop, reset, and
-state readout.
+provides InstructionGoal and PointGoal control, live view, WASD driving,
+emergency stop, reset, and state readout.
 
 ## Highlights
 
@@ -141,6 +141,29 @@ robot streams its first-person frames to the server and tracks the returned
 waypoints with the MPC — the same client protocol and controller the real robots use in
 [`robot_deploy/`](../robot_deploy/README.md).
 
+## Driving it with PointGoal
+
+Select **PointGoal** in the web console and enter a target offset in metres:
+`Forward` is positive in front of the robot and `Left` is positive to its left.
+When **Start PointGoal** is pressed, that start-relative offset is transformed
+once into a fixed world-frame goal. Arrival uses an independent 0.15 m geometric
+tolerance; no model stop token is involved.
+
+PointGoal deliberately bypasses LightNav while reusing the same MPC, collision
+guard, and bounded local recovery as InstructionGoal mode. The default
+**Map-aware A\*** option samples a local occupancy grid with the TurtleBot's
+actual MuJoCo collision geometry, plans an eight-connected route without
+diagonal corner cutting, simplifies it by line of sight, and feeds the result
+to the MPC. Map construction uses a separate `MjData`, so it does not move or
+pause the live simulation. The **Direct line + local recovery** option retains
+the intentionally weak reactive baseline used for comparison.
+
+Map-aware PointGoal is currently implemented only for the bundled TurtleBot.
+Other robot backends fail explicitly instead of silently reverting to a direct
+path, because a valid occupancy map depends on the embodiment footprint.
+Inputs are finite, limited to 25 m from the start, and do not constrain the
+final heading.
+
 ## Layout
 
 ```text
@@ -152,6 +175,7 @@ mujoco_demo/
 │   ├── model.py       # scene loading and MuJoCo compilation
 │   ├── simulation.py  # shared runtime, cameras, watchdog, frame capture
 │   ├── mpc.py         # CasADi/IPOPT kinematic MPC
+│   ├── grid_planner.py# occupancy grid, A*, line-of-sight simplification
 │   ├── vln_client.py  # VLN WebSocket client
 │   └── server.py      # HTTP/WebSocket and control ownership
 ├── scripts/
@@ -183,6 +207,20 @@ IPOPT settings, and parameters all match `robot_deploy`'s `vln_mpc`:
 | `q_x` / `q_y` / `q_yaw` | `10.0` / `10.0` / `1.0` |
 | `r_v` / `r_w` | `0.1` / `0.1` |
 | IPOPT | `max_iter=100`, `acceptable_tol=1e-8`, `acceptable_obj_change_tol=1e-6` |
+
+The default TurtleBot remains kinematic, but each proposed planar pose is now
+checked against MuJoCo contacts before it is committed. A move that would deepen
+a lateral robot/environment penetration is rejected, while an in-place turn is
+still allowed when that turn is collision-free. The current block state, contact
+names, attempted penetration, and event count are exposed under
+`simulation.backend.collision_guard`. This is a hard safety boundary for the
+demo. In automatic VLN mode, a bounded local recovery layer consumes that
+feedback: it backs off 0.12 m, turns 90 degrees, follows the obstacle for 0.45 m,
+turns back to the impact heading, and probes forward for 0.30 m. A blocked probe
+adds another bypass segment, up to eight attempts. Its phase and effective
+command are exposed under `avoidance`. This is reactive local recovery rather
+than a map-based planner, so failure stops the robot instead of allowing an
+unbounded manoeuvre.
 
 ## Why a single MolmoSpaces scene is enough
 
@@ -227,11 +265,75 @@ endorsed by Open Robotics or ROBOTIS.
 
 ## Known limits
 
+For reproducible offline observations, run `MUJOCO_GL=egl python scripts/capture_replay.py
+--route left --output-dir /absolute/fresh-directory` in the demo environment.
+This renders scripted motion with synchronous simulation base poses, not a model
+navigation rollout. See [capture flags](../docs/CONFIGURATION.md#offline-mujoco-capture).
+
+For model-driven experiments with the external pure DWA planner, see
+[isolated closed-loop flags and limitations](../docs/CONFIGURATION.md#isolated-dwa-closed-loop-simulation).
+This separate offline harness saves the full model/control/observation chain and
+can compare ten versus five consumed points. It pauses physics during inference;
+successful execution must not be reported as successful navigation or real-time acceptance.
+
+### Pre-robot simulation acceptance
+
+Run the fault-injection and controller tests on the isolated simulation machine:
+
+```bash
+SOMA_DWA_PLANNER=/absolute/path/to/soma_lightnav_dwa_stdio \
+  MUJOCO_GL=egl python -m pytest -q --runxfail \
+  -o junit_family=legacy --junitxml=/absolute/output/pre-robot.xml
+```
+
+`SOMA_DWA_PLANNER` enables five tests using the actual external C++ DWA planner
+and MuJoCo dynamics; without it those tests are skipped, not passed. Synthetic
+paths and explicit obstacle samples isolate planning from model semantics.
+Wall tests check the rotated planning footprint at every 5 ms simulation step,
+and require no simulator collision-guard intervention. Minimum clearance is saved
+as a JUnit property; passing this one wall does not establish a safe margin in general.
+
+`test_pre_robot_safety.py` separately exercises the actual demo update loop with
+deterministic inference/controller doubles: capture-frame alignment while physics
+advances, command-watchdog loss, cancellation, late controller results, invalid
+numbers, missing capture pose and model-stop versus arrival. This is not actual
+GPU inference timing or production Soma task integration.
+
+The initial strict run exposed two failures: adopting aged model replies and
+keeping a held path alive after observations stopped. Both are now normal passing
+regressions, with fresh-reply recovery, old-stop rejection and missing-clock tests
+added (72 tests pass). This is not an all-clear for robot deployment.
+
+VLN observations now expire 500 ms after their local monotonic capture time,
+including rendering, encoding, queueing and inference. The deadline is not renewed
+by receiving a reply or refreshing a velocity command. Expiry revokes the path,
+pending MPC results and recovery manoeuvre and commands zero; a fresh valid reply
+can resume the task. Missing capture clocks fail closed. PointGoal is unaffected.
+Do not work around slow inference by casually increasing this deadline.
+
+The demo now admits a new model frame only when no request is in flight, rather
+than prefetching a frame that will wait behind the previous inference. Accepted
+frames are never replaced. Reply publication is atomic with the session check,
+so an old request cannot refill the result queue after cancellation. The current
+74-test regression covers these contracts. Demand-driven input is not guaranteed
+to preserve a 4 Hz capture cadence; that remains a separate model-history gate.
+The real-time probe records queue and capture-age components to distinguish input
+waiting from request latency; see [timing configuration](../docs/CONFIGURATION.md#pre-robot-safety-tests).
+
+The real-time report now also includes monotonic-clock handoff accounting and
+optional model-stage timings. Each reply can meet its own 500 ms deadline while
+the previous path expires before it arrives: continuity additionally requires
+the capture interval plus the next reply's age to fit that same budget. The
+diagnostic does not bypass the watchdog or claim that replay/physics is real-time
+certified. The expanded regression suite contains 80 passing tests.
+
 - The TurtleBot is a lightweight geometry drawn for this project, not the
   official high-fidelity TurtleBot3 mesh;
 - MicroDuck mode requires external MJCF assets and a compatible ONNX policy;
 - The spawn pose is fixed at `(x=6.5, y=13.8, yaw=0)` and environment objects
   are frozen;
 - RGB only for now, at a camera resolution of `480 × 270`;
-- The MPC only tracks the local waypoints provided by VLN — no navigation map,
-  global planning, collision response, or ROS interface.
+- The MPC only tracks the local waypoints provided by VLN — there is no
+  navigation map, global planning, or ROS interface. Automatic VLN mode has a
+  bounded reactive detour, but complex layouts can still end in a safe stop and
+  need a new VLA path or a real map-based local planner.

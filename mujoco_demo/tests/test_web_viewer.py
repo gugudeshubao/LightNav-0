@@ -29,9 +29,29 @@ def test_third_person_picture_in_picture_controls_are_wired() -> None:
         "third-person-overlay",
         "third-person-overlay-image",
         "third-person-overlay-toggle",
+        "instruction-goal-mode",
+        "point-goal-mode",
+        "instruction-goal-panel",
+        "point-goal-panel",
+        "point-forward",
+        "point-left",
+        "point-planner",
+        "point-goal-toggle",
+        "point-goal-state",
+        "point-goal-detail",
     } <= parser.ids
     assert '"/api/third-person.jpg"' in script
     assert "Promise.allSettled(updates)" in script
     assert 'storedBoolean("third-person-overlay-minimized")' in script
+    assert "Motion blocked by collision guard" in script
+    assert "Local collision recovery" in script
+    assert 'type:"set_point_goal"' in script
+    assert "planner:ui.pointPlanner.value" in script
+    assert "Map-aware A*" in (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="point-forward" type="number" value="1.0"' in (
+        WEB_DIR / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "Goal reached within" in script
     assert ".third-person-overlay.minimized" in styles
+    assert ".point-goal-grid" in styles
     assert "@media (max-width: 560px)" in styles

@@ -9,6 +9,7 @@ import mujoco
 import numpy as np
 from PIL import Image
 
+from .grid_planner import GridPlan
 from .model import CAMERA_HEIGHT, CAMERA_WIDTH, PHYSICS_DT
 from .mpc import TRACK_V_MAX, W_MAX
 from .robots.base import RobotBackend
@@ -24,6 +25,7 @@ class CameraFrame:
     rgb: bytes
     jpeg: bytes
     pose: tuple[float, float, float]
+    captured_monotonic_ns: int = 0
 
 
 class Simulation:
@@ -64,6 +66,12 @@ class Simulation:
             self.robot.reset()
             self._command = (0.0, 0.0)
             self._command_at = 0.0
+            # Do not let a new VLN session consume an image captured at the
+            # pre-reset pose. The render loop will publish a fresh pair next.
+            self._frame = None
+            self._third_person_frame = None
+            self._frame_count = 0
+            self._started_at = time.monotonic()
 
     def set_velocity(self, linear: float, angular: float) -> None:
         # Physical sanity bound only; per-mode VLN limits live in the MPC.
@@ -72,6 +80,18 @@ class Simulation:
         with self._lock:
             self._command = (linear, angular)
             self._command_at = time.monotonic()
+
+    def plan_world_path(
+        self,
+        start_pose: tuple[float, float, float],
+        goal_world: tuple[float, float],
+    ) -> GridPlan:
+        planner = getattr(self.robot, "plan_world_path", None)
+        if planner is None:
+            raise ValueError(
+                f"map-aware PointGoal is not supported by {self.robot_name}"
+            )
+        return planner(start_pose, goal_world)
 
     def frame(self) -> CameraFrame | None:
         with self._lock:
@@ -86,10 +106,11 @@ class Simulation:
         stamp_ns: int,
         rgb: np.ndarray,
         pose: tuple[float, float, float],
+        captured_monotonic_ns: int = 0,
     ) -> CameraFrame:
         output = io.BytesIO()
         Image.fromarray(rgb, "RGB").save(output, format="JPEG", quality=82)
-        return CameraFrame(stamp_ns, rgb.tobytes(), output.getvalue(), pose)
+        return CameraFrame(stamp_ns, rgb.tobytes(), output.getvalue(), pose, captured_monotonic_ns)
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -144,6 +165,7 @@ class Simulation:
                     next_step = now
                 if now >= next_frame:
                     with self._lock:
+                        captured_monotonic_ns = time.monotonic_ns()
                         renderer.update_scene(
                             self.data,
                             camera=self.robot.camera_name,
@@ -159,11 +181,12 @@ class Simulation:
                         x, y, _, yaw = self.robot.state().pose
                         capture_pose = (x, y, yaw)
                     stamp_ns = time.time_ns()
-                    frame = self._encode_frame(stamp_ns, rgb, capture_pose)
+                    frame = self._encode_frame(stamp_ns, rgb, capture_pose, captured_monotonic_ns)
                     third_person_frame = self._encode_frame(
                         stamp_ns,
                         third_person_rgb,
                         capture_pose,
+                        captured_monotonic_ns,
                     )
                     with self._lock:
                         self._frame = frame

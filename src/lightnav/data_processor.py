@@ -463,7 +463,9 @@ class Qwen3VLDataProcessor:
         # get_rope_index returns [3, batch, seq_len]; batch dim is at index 1
         result["position_ids"] = result["position_ids"].squeeze(1)
         # transformers 5.8's Qwen3-VL processor emits `mm_token_type_ids` ([1, seq]),
-        # which is not needed at inference (image/video masks are derived below).
+        # which would become stale after prompt appending / answer trimming.
+        # The HF engine rebuilds it from the final prompt for generation M-RoPE;
+        # image/video masks alone do not replace this metadata in transformers.
         result.pop("mm_token_type_ids", None)
         # pixel_values_videos / video_grid_thw: processor may return with
         # leading batch dim [1, L, C] / [1, N, 3]; squeeze to [L, C] / [N, 3]

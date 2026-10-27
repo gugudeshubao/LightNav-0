@@ -81,6 +81,7 @@ def test_keep_mode_respects_pre_vit_pooling_factors():
 
 def test_engine_config_default_is_stretch_and_validates():
     assert InferenceConfig().aspect_mode == "stretch"
+    assert InferenceConfig().vllm_quantization is None
     from lightnav.inference.engine import VLNInferenceEngine
 
     bundle = SimpleNamespace(slowfast_tiers=None, num_history_frames=4)
